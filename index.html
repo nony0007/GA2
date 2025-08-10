@@ -1,15 +1,23 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>GA2 Site</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Site Compliance — GA2 / GA1 & Permits</title>
   <link rel="stylesheet" href="./style.css">
+  <!-- Libraries (must load BEFORE app.js) -->
+  <script src="https://unpkg.com/preact@10.22.0/dist/preact.umd.js"></script>
+  <script src="https://unpkg.com/preact@10.22.0/hooks/dist/hooks.umd.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+  <!-- date-fns UMD exposes `dateFns` global. Keep this BEFORE app.js -->
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/dist/date-fns.min.js"></script>
+  <!-- QR generator (UMD, global `qrcode`) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <meta name="theme-color" content="#111827">
 </head>
 <body>
   <div id="app"></div>
-  <!-- Load date-fns from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/dist/date-fns.min.js"></script>
+  <div id="error" style="display:none;position:fixed;bottom:8px;left:8px;right:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:8px;border-radius:8px;font-size:12px;z-index:100"></div>
   <script src="./app.js"></script>
 </body>
 </html>
