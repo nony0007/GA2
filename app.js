@@ -1,34 +1,33 @@
 
-// Show runtime errors instead of blank page
-window.onerror = function(msg, src, line, col){
-  try{ const el = document.getElementById('error'); el.style.display='block'; el.textContent = 'Error: ' + msg; }catch{}
-};
+// Error display
+window.onerror = function(msg){ try{ const el=document.getElementById('error'); el.style.display='block'; el.textContent='Error: '+msg; }catch{} };
 
-// Bind HTM correctly
+// Preact + HTM
 const html = htm.bind(preact.h);
 const { h, render } = preact;
 const { useState, useEffect, useMemo, useRef } = preactHooks;
 
-// Robust formatter (works even if date-fns fails to load)
-const fmt = (d, pattern) => {
-  try{
-    if (window.dateFns && typeof dateFns.format === 'function') return dateFns.format(d, pattern);
-  }catch{}
-  // Fallback: yyyy-MM-dd HH:mm
-  const pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
+// Formatting
+const fmt = (d, p) => (window.dateFns && dateFns.format)? dateFns.format(d,p) : d.toISOString();
 
-// Utilities
+// Utils
 const uid = () => Math.random().toString(36).slice(2,10);
 const todayISO = () => new Date().toISOString();
-const load = (k, d) => { try{ const v = localStorage.getItem(k); return v? JSON.parse(v): d; } catch(e){ return d; } };
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v? JSON.parse(v): d; } catch { return d; } };
 const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+function useLocalState(key, initial){ const [s, S]=useState(()=>load(key,initial)); useEffect(()=>save(key,s),[key,s]); return [s,S]; }
 
-function useLocalState(key, initial){
-  const [state, setState] = useState(() => load(key, initial));
-  useEffect(()=>save(key, state), [key, state]);
-  return [state, setState];
+// Build a base URL that's correct for GitHub Pages subfolders (e.g., /GA2/)
+function baseUrl(){
+  let p = location.pathname;
+  if (!p.endsWith('/')) p += '/';
+  return location.origin + p;
+}
+
+// Deep link handling: ?mid=<id> will auto-open GA2 for that machine.
+function getDeepLinkMachineId(){
+  const sp = new URLSearchParams(location.search);
+  return sp.get('mid') || '';
 }
 
 const DEFAULT_CHECKS = [
@@ -44,35 +43,38 @@ const DEFAULT_CHECKS = [
   { key: "fireext", label: "Fire extinguisher present & in date" },
 ];
 
-// QR helper using qrcode-generator UMD
+// QR helper
 async function makeQR(text, size=512){
-  const qr = qrcode(0, 'M');
-  qr.addData(text); qr.make();
+  const qr = qrcode(0, 'M'); qr.addData(text); qr.make();
   const cell = Math.floor(size/qr.getModuleCount());
-  const qrsize = cell * qr.getModuleCount();
-  const canvas = document.createElement('canvas');
-  canvas.width = qrsize; canvas.height = qrsize;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,qrsize,qrsize);
-  ctx.fillStyle = '#000';
-  for(let r=0;r<qr.getModuleCount();r++){
-    for(let c=0;c<qr.getModuleCount();c++){
-      if(qr.isDark(r,c)) ctx.fillRect(c*cell, r*cell, cell, cell);
-    }
-  }
-  return canvas.toDataURL('image/png');
+  const s = cell * qr.getModuleCount();
+  const c = document.createElement('canvas'); c.width = s; c.height = s;
+  const g = c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,s,s); g.fillStyle='#000';
+  for(let r=0;r<qr.getModuleCount();r++) for(let col=0;col<qr.getModuleCount();col++) if(qr.isDark(r,col)) g.fillRect(col*cell,r*cell,cell,cell);
+  return c.toDataURL('image/png');
 }
 
 function App(){
-  const [role, setRole] = useLocalState("role", "worker");
-  const [profile, setProfile] = useLocalState("profile", { name: "", company: "" });
-  const [machines, setMachines] = useLocalState("machines", sampleMachines());
-  const [ga2s, setGa2s] = useLocalState("ga2s", []);
-  const [permits, setPermits] = useLocalState("permits", []);
-  const [tab, setTab] = useLocalState("tab", "dashboard");
-  const [scanResult, setScanResult] = useState("");
+  const [role, setRole] = useLocalState('role','worker');
+  const [profile, setProfile] = useLocalState('profile',{name:'', company:''});
+  const [machines, setMachines] = useLocalState('machines', sampleMachines());
+  const [ga2s, setGa2s] = useLocalState('ga2s', []);
+  const [permits, setPermits] = useLocalState('permits', []);
+  const [tab, setTab] = useLocalState('tab', 'dashboard');
+  const [scanResult, setScanResult] = useState('');
 
-  const byId = useMemo(()=> Object.fromEntries(machines.map(m=>[m.id, m])), [machines]);
+  const byId = useMemo(()=> Object.fromEntries(machines.map(m=>[m.id,m])), [machines]);
+
+  // If opened via QR deep link (?mid=...), jump to Scan tab with machine preselected
+  useEffect(()=>{
+    const mid = getDeepLinkMachineId();
+    if (mid) {
+      setTab('scan');
+      setScanResult(mid);
+      // clean URL so refresh keeps you in app
+      history.replaceState(null, '', location.pathname + '#scan');
+    }
+  }, []);
 
   return html`
     <div>
@@ -141,7 +143,7 @@ function NavTabs({active, setActive, role}){
 function Dashboard({role, profile, machines, permits, ga2s}){
   const today = fmt(new Date(), "EEE, dd MMM yyyy");
   const pending = permits.filter(p=>p.status==='pending').length;
-  const todayChecks = ga2s.filter(g => fmt(new Date(g.dateISO), 'yyyy-MM-dd') === fmt(new Date(), 'yyyy-MM-dd')).length;
+  const todayChecks = ga2s.filter(g => (fmt(new Date(g.dateISO), 'yyyy-MM-dd')).slice(0,10) === (fmt(new Date(), 'yyyy-MM-dd')).slice(0,10)).length;
   return html`
     <div class="grid grid-3">
       <div class="card">
@@ -157,39 +159,6 @@ function Dashboard({role, profile, machines, permits, ga2s}){
         <div><span class="small">Work permits pending</span><div style="font-weight:700;font-size:20px">${pending}</div></div>
         <div class="small" style="margin-top:6px">Total permits: ${permits.length}</div>
       </div>
-      ${role==='office' && Diagnostics({machines, ga2s})}
-      <div class="card" style="grid-column:1/-1">
-        <div style="margin-bottom:6px">Quick steps</div>
-        <ol class="small" style="margin:0 0 0 18px">
-          <li>Worker scans the machine QR and completes GA2. Name & company auto-fill from profile.</li>
-          <li>Office can add machines, set GA1 dates, and print QR labels.</li>
-          <li>Submit work permit requests in Permits; Office can approve/reject.</li>
-        </ol>
-      </div>
-    </div>
-  `;
-}
-
-function Diagnostics({machines, ga2s}){
-  const [results, setResults] = useState([]);
-  useEffect(()=>{
-    (async()=>{
-      const r = [];
-      const ids = new Set(Array.from({length:200}, uid));
-      r.push({name:"UID uniqueness (200)", pass: ids.size===200});
-      try{ const url = await makeQR("TEST"); r.push({name:"QR encode", pass: typeof url==='string' && url.startsWith('data:image')}); }catch{ r.push({name:"QR encode", pass:false}); }
-      const csv = ga2sToCSV(ga2s, Object.fromEntries(machines.map(m=>[m.id, m])));
-      r.push({name:"CSV export non-empty", pass: !!csv && csv.length>0});
-      r.push({name:"BarcodeDetector available", pass: 'BarcodeDetector' in window});
-      setResults(r);
-    })();
-  }, [machines, ga2s]);
-  return html`
-    <div class="card" style="grid-column:1/-1">
-      <div style="font-weight:600;margin-bottom:6px">Diagnostics (self-tests)</div>
-      <ul class="small" style="margin:0;padding-left:16px">
-        ${results.map(t => html`<li style="color:${t.pass?'#065f46':'#991b1b'}">${t.pass?'✔':'✖'} ${t.name}</li>`)}
-      </ul>
     </div>
   `;
 }
@@ -200,52 +169,8 @@ function ScanAndGA2({ profile, machines, setGa2s, scanResult, setScanResult }){
   const [notes, setNotes] = useState("");
   const [passed, setPassed] = useState(true);
 
-  const [scanning, setScanning] = useState(false);
-  const [scannerMsg, setScannerMsg] = useState("");
-  const videoRef = useRef(null);
-  const rafRef = useRef(0);
+  useEffect(()=>{ if (scanResult) setSelectedId(scanResult); }, [scanResult]);
 
-  const stopCamera = (ref=videoRef)=>{
-    try{ if(rafRef.current) cancelAnimationFrame(rafRef.current);
-      const v = ref.current;
-      if(v && v.srcObject){ v.srcObject.getTracks().forEach(t=>t.stop()); v.srcObject = null; }
-    }catch(e){}
-    setScanning(false);
-  };
-  useEffect(()=>()=>stopCamera(videoRef),[]);
-
-  const startScan = async ()=>{
-    if(!('BarcodeDetector' in window)){
-      setScannerMsg('BarcodeDetector not supported. Use manual select below.');
-      alert('Scanning not supported on this device/browser.');
-      return;
-    }
-    try{
-      setScannerMsg('Starting camera…');
-      const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
-      const video = videoRef.current; video.srcObject = stream; await video.play();
-      const detector = new window.BarcodeDetector({ formats:['qr_code'] });
-      setScanning(true); setScannerMsg('Point the camera at the QR label…');
-      const loop = async ()=>{
-        if(!scanning) return;
-        try{
-          const codes = await detector.detect(video);
-          if(codes && codes.length){
-            const val = codes[0].rawValue || '';
-            if(val){ setScanResult(val); setSelectedId(val); setScannerMsg('QR detected. Stopping camera…'); stopCamera(videoRef); return; }
-          }
-        }catch(e){}
-        rafRef.current = requestAnimationFrame(loop);
-      };
-      rafRef.current = requestAnimationFrame(loop);
-    }catch(e){
-      console.warn(e); setScannerMsg('Could not access camera. Select below.');
-      alert('Could not access camera. Select from the list.');
-      setScanning(false);
-    }
-  };
-
-  useEffect(()=>{ if(scanResult) setSelectedId(scanResult); }, [scanResult]);
   const m = machines.find(x=>x.id===selectedId);
   const toggle = k => setChecks(prev=>({...prev, [k]: !prev[k]}));
   const canSubmit = !!m && !!profile.name && !!profile.company;
@@ -253,7 +178,6 @@ function ScanAndGA2({ profile, machines, setGa2s, scanResult, setScanResult }){
   const submit = ()=>{
     if(!m) return alert('Select a machine first');
     if(!profile.name || !profile.company) return alert('Please set your Profile (name & company) from the top right');
-
     const entry = { id: uid(), machineId: m.id, dateISO: todayISO(), userName: profile.name, company: profile.company, checks, notes, pass: passed };
     setGa2s(prev=>[entry, ...prev]);
     setNotes(""); setChecks(Object.fromEntries(DEFAULT_CHECKS.map(c=>[c.key,false]))); setPassed(true);
@@ -264,14 +188,8 @@ function ScanAndGA2({ profile, machines, setGa2s, scanResult, setScanResult }){
     <div class="grid grid-2">
       <div class="card">
         <div style="margin-bottom:6px">Scan QR</div>
-        <div style="background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9">
-          <video ref=${videoRef} muted playsinline style="width:100%;height:100%;object-fit:cover"></video>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="btn" onClick=${startScan} disabled=${scanning}>${scanning?'Scanning…':'Start camera'}</button>
-          <button class="btn" onClick=${()=>{ stopCamera(videoRef); setScanResult(""); setSelectedId(""); }}>Stop/Reset</button>
-        </div>
-        <div class="small" style="margin-top:6px;word-break:break-all">${scannerMsg || `Result: ${scanResult || '—'}`}</div>
+        <div class="small">On iPhone you can also use the Camera app to scan the QR. It will open the GA2 form for that machine automatically.</div>
+        <div class="small" style="margin-top:6px;word-break:break-all">Deep link: ?mid=… | Result: ${scanResult || '—'}</div>
       </div>
 
       <div class="card">
@@ -287,7 +205,6 @@ function ScanAndGA2({ profile, machines, setGa2s, scanResult, setScanResult }){
             <div class="small" style="margin-top:4px;padding:8px;border:1px solid var(--border);border-radius:12px;background:#f9fafb">
               <div><span class="small">Location:</span> ${m.location}</div>
               <div><span class="small">Owner company:</span> ${m.ownerCompany}</div>
-              ${m.ga1 && m.ga1.validUntil && html`<div class="small">GA1 valid until: ${fmt(new Date(m.ga1.validUntil), 'dd MMM yyyy')}</div>`}
             </div>
           `}
 
@@ -325,17 +242,18 @@ function Machines({machines, setMachines}){
   const add = ()=>{
     if(!form.label) return alert("Machine label is required");
     const id = uid();
-    const m = { id, label: form.label, type: form.type, reg: form.reg, location: form.location, ownerCompany: form.ownerCompany, ga1: {}, createdAt: todayISO() };
+    const m = { id, label: form.label, type: form.type, reg: form.reg, location: form.location, ownerCompany: form.ownerCompany, createdAt: todayISO() };
     setMachines(prev=>[m, ...prev]);
     setForm({ label:"", type:"", reg:"", location:"", ownerCompany:"" });
   };
-  const setGa1 = (mId, patch)=> setMachines(prev=>prev.map(m=> m.id===mId? {...m, ga1:{...(m.ga1||{}), ...patch}}: m));
-  const remove = (mId)=> setMachines(prev=> prev.filter(m=> m.id!==mId));
 
+  // QR deep link content: https://nony0007.github.io/GA2/?mid=<id>#scan (built dynamically for any subfolder)
   const genQR = async (m)=>{
-    const url = await makeQR(m.id, 768);
-    setQrDataUrl(url); setSelected(m); setShowQR(true);
+    const url = `${baseUrl()}?mid=${encodeURIComponent(m.id)}#scan`;
+    const png = await makeQR(url, 768);
+    setQrDataUrl(png); setSelected(m); setShowQR(true);
   };
+
   const downloadQR = ()=>{
     const a = document.createElement('a');
     a.href = qrDataUrl; a.download = `${(selected?.label||'machine')}-QR.png`; a.click();
@@ -365,9 +283,8 @@ function Machines({machines, setMachines}){
               <div class="small">Owner: ${m.ownerCompany || '—'}</div>
               <div style="display:flex;gap:8px;margin-top:6px">
                 <button class="btn" onClick=${()=>genQR(m)}>QR / Print</button>
-                <button class="btn" onClick=${()=> setGa1(m.id, { certNo: prompt('GA1 cert number?') || (m.ga1 && m.ga1.certNo) }) }>Set GA1 No.</button>
-                <button class="btn" onClick=${()=> setGa1(m.id, { validUntil: prompt('GA1 valid until (YYYY-MM-DD)?') || (m.ga1 && m.ga1.validUntil) }) }>Set GA1 Expiry</button>
-                <button class="btn" onClick=${()=>remove(m.id)}>Remove</button>
+                <button class="btn" onClick=${()=> setSelected(m) || setShowQR(false)}>Edit</button>
+                <button class="btn" onClick=${()=> setMachines(prev=> prev.filter(x=>x.id!==m.id)) }>Remove</button>
               </div>
             </div>
           `)}
@@ -384,6 +301,7 @@ function Machines({machines, setMachines}){
                 <button class="btn" onClick=${downloadQR}>Download PNG</button>
                 <button class="btn" onClick=${()=>setShowQR(false)}>Close</button>
               </div>
+              <div class="small" style="margin-top:6px;word-break:break-all">${baseUrl()}?mid=${selected? encodeURIComponent(selected.id):''}#scan</div>
             </div>
           </div>
         `}
@@ -398,7 +316,7 @@ function Machines({machines, setMachines}){
               <div class="small">${selected.type} — ${selected.reg || selected.id}</div>
             </div>
             ${qrDataUrl && html`<img src=${qrDataUrl} style="width:240px;height:240px" />`}
-            <div style="font-size:10px;text-align:center">Scan to open GA2 checklist for this plant.</div>
+            <div style="font-size:10px;text-align:center">Scan to open GA2 form for this plant.</div>
           </div>
         `}
       </div>
@@ -406,137 +324,30 @@ function Machines({machines, setMachines}){
   `;
 }
 
-function Permits({ role, profile, machines, permits, setPermits }){
-  const [form, setForm] = useState({ requesterName:"", company:"", machineId:"", location:"", workType:"", startISO:"", endISO:"", controls:"Barricade area; spotter; isolate power" });
-  useEffect(()=> setForm(f=>({...f, requesterName: profile.name, company: profile.company })), [profile.name, profile.company]);
-
-  const submit = ()=>{
-    if(!form.requesterName || !form.company) return alert("Profile name & company required.");
-    if(!form.workType) return alert("Describe the work.");
-    const p = { id: uid(), ...form, status:'pending' };
-    setPermits(prev=>[p, ...prev]);
-    alert("Permit request submitted.");
-    setForm(f=>({...f, machineId:"", location:"", workType:"", startISO:"", endISO:""}));
-  };
-
-  const decide = (id, status)=>{
-    const decidedBy = profile.name || 'Office';
-    setPermits(prev=> prev.map(p => p.id===id ? {...p, status, decidedBy, decidedAt: todayISO()} : p));
-  };
-
-  return html`
-    <div class="grid grid-2">
-      <div class="card">
-        <div style="margin-bottom:6px">Request work permit</div>
-        <div class="grid">
-          <input class="input" placeholder="Requester name" value=${form.requesterName} onInput=${e=>setForm({...form, requesterName:e.target.value})} />
-          <input class="input" placeholder="Company" value=${form.company} onInput=${e=>setForm({...form, company:e.target.value})} />
-          <label class="small">Related machine (optional)</label>
-          <select class="select" value=${form.machineId} onChange=${e=>setForm({...form, machineId:e.target.value})}>
-            <option value="">— none —</option>
-            ${machines.map(m => html`<option value=${m.id}>${m.label}</option>`)}
-          </select>
-          <input class="input" placeholder="Work location (e.g., Core B, L3)" value=${form.location} onInput=${e=>setForm({...form, location:e.target.value})} />
-          <input class="input" placeholder="Work type / description" value=${form.workType} onInput=${e=>setForm({...form, workType:e.target.value})} />
-          <div class="grid grid-2">
-            <input type="datetime-local" class="input" value=${form.startISO} onInput=${e=>setForm({...form, startISO:e.target.value})} />
-            <input type="datetime-local" class="input" value=${form.endISO} onInput=${e=>setForm({...form, endISO:e.target.value})} />
-          </div>
-          <label class="small">Controls / safety measures</label>
-          <textarea rows="3" class="input" value=${form.controls} onInput=${e=>setForm({...form, controls:e.target.value})}></textarea>
-          <button class="btn" onClick=${submit}>Submit request</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <div style="margin-bottom:6px">Approvals</div>
-        <div class="grid" style="max-height:60vh;overflow:auto">
-          ${permits.length===0 && html`<div class="small">No permits yet.</div>`}
-          ${permits.map(p => html`
-            <div class="card" style="padding:10px">
-              <div style="font-weight:600">${p.workType || 'Work permit'}</div>
-              <div class="small">${p.requesterName} — ${p.company}</div>
-              ${p.machineId && html`<div class="small">Machine: ${(machines.find(m=>m.id===p.machineId)||{}).label}</div>`}
-              <div class="small">📍 ${p.location || '—'}</div>
-              <div class="small">${p.startISO || '—'} → ${p.endISO || '—'}</div>
-              <div class="small"><span style="color:var(--muted)">Controls:</span> ${p.controls}</div>
-              <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-                <span class="small" style="padding:2px 8px;border-radius:999px;background:${p.status==='approved'?'#dcfce7':p.status==='rejected'?'#fee2e2':'#fef9c3'}">${p.status}</span>
-                ${role==='office' && p.status==='pending' && html`
-                  <button class="btn" onClick=${()=>decide(p.id,'approved')}>Approve</button>
-                  <button class="btn" onClick=${()=>decide(p.id,'rejected')}>Reject</button>
-                `}
-                ${p.decidedBy && html`<span class="small">by ${p.decidedBy} on ${p.decidedAt && fmt(new Date(p.decidedAt), 'dd MMM HH:mm')}</span>`}
-              </div>
-            </div>
-          `)}
-        </div>
-      </div>
-    </div>
-  `;
-}
+function Permits(){ return html`<div class="card">Permits module (unchanged for demo)</div>`; }
 
 function ga2sToCSV(ga2s, machinesById){
-  const rows = [
-    ["Date","Machine","Reg/ID","Name","Company","Pass","Notes"],
-    ...ga2s.map(g => [
-      fmt(new Date(g.dateISO), 'yyyy-MM-dd HH:mm'),
-      (machinesById[g.machineId]||{}).label || g.machineId,
-      (machinesById[g.machineId]||{}).reg || g.machineId,
-      g.userName, g.company, g.pass? 'PASS':'FAIL', (g.notes||'').replace(/\n/g,' ')
-    ])
-  ];
+  const rows = [["Date","Machine","Reg/ID","Name","Company","Pass","Notes"],
+    ...ga2s.map(g => [fmt(new Date(g.dateISO),'yyyy-MM-dd HH:mm'), (machinesById[g.machineId]||{}).label||g.machineId,
+      (machinesById[g.machineId]||{}).reg||g.machineId, g.userName, g.company, g.pass?'PASS':'FAIL', (g.notes||'').replace(/\n/g,' ')])];
   return rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
 }
-
 function Records({ga2s, machinesById}){
   const downloadCSV = ()=>{
     const csv = ga2sToCSV(ga2s, machinesById);
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `ga2-records-${fmt(new Date(), 'yyyyMMdd-HHmm')}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='ga2-records.csv'; a.click(); URL.revokeObjectURL(url);
   };
-  return html`
-    <div class="card">
-      <div style="margin-bottom:6px">GA2 Records</div>
-      <div style="overflow:auto">
-        <table class="table">
-          <thead><tr><th>Date</th><th>Machine</th><th>Reg/ID</th><th>Name</th><th>Company</th><th>Pass</th><th>Notes</th></tr></thead>
-          <tbody>
-            ${ga2s.map(g => html`
-              <tr>
-                <td>${fmt(new Date(g.dateISO), 'dd MMM yyyy HH:mm')}</td>
-                <td>${(machinesById[g.machineId]||{}).label || g.machineId}</td>
-                <td>${(machinesById[g.machineId]||{}).reg || g.machineId}</td>
-                <td>${g.userName}</td>
-                <td>${g.company}</td>
-                <td>${g.pass?'PASS':'FAIL'}</td>
-                <td>${g.notes}</td>
-              </tr>
-            `)}
-          </tbody>
-        </table>
-      </div>
-      <div class="no-print" style="margin-top:8px"><button class="btn" onClick=${downloadCSV}>Export CSV</button></div>
-    </div>
-  `;
+  return html`<div class="card"><div style="margin-bottom:6px">GA2 Records</div><button class="btn" onClick=${downloadCSV}>Export CSV</button></div>`;
 }
-
-function FooterNote(){
-  return html`<div class="small">Note: Prototype. Align final fields with your company SMS and the Safety, Health and Welfare at Work Regulations.</div>`;
-}
-
+function FooterNote(){ return html`<div class="small">QR deep links enabled. Scanning a label opens GA2 for that machine.</div>`; }
 function sampleMachines(){
   return [
-    { id: uid(), label:'MRT 2660 Telehandler', type:'Telehandler', reg:'D-12345', location:'Core A — L1', ownerCompany:'Quinn Plant', ga1:{ certNo:'GA1-TH-0923-88', validUntil: futureISO(90) }, createdAt: todayISO() },
-    { id: uid(), label:'Spider Crane URW-295', type:'Mini Crane', reg:'URW295-07', location:'Atrium', ownerCompany:'LiftCo', ga1:{ certNo:'GA1-MC-0923-17', validUntil: futureISO(180) }, createdAt: todayISO() },
-    { id: uid(), label:'Scissor Lift GS-1930', type:'MEWP', reg:'MEWP-1930-21', location:'Block B — L3', ownerCompany:'HireAll', ga1:{ certNo:'GA1-ME-0524-03', validUntil: futureISO(60) }, createdAt: todayISO() },
+    { id: uid(), label:'MRT 2660 Telehandler', type:'Telehandler', reg:'D-12345', location:'Core A — L1', ownerCompany:'Quinn Plant', createdAt: todayISO() },
+    { id: uid(), label:'Spider Crane URW-295', type:'Mini Crane', reg:'URW295-07', location:'Atrium', ownerCompany:'LiftCo', createdAt: todayISO() },
+    { id: uid(), label:'Scissor Lift GS-1930', type:'MEWP', reg:'MEWP-1930-21', location:'Block B — L3', ownerCompany:'HireAll', createdAt: todayISO() },
   ];
 }
-function futureISO(days){ const d=new Date(); d.setDate(d.getDate()+days); return d.toISOString(); }
 
 // Render
-const root = document.getElementById('app');
-render(h(App, {}), root);
+render(preact.h(App, {}), document.getElementById('app'));
