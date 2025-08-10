@@ -1,6 +1,17 @@
 
-// Preact + htm setup
-const { html } = htmPreact;
+// Simple runtime error display to help debug on GitHub Pages
+window.onerror = function(msg, src, line, col, err){
+  try{
+    const el = document.getElementById('error') || (function(){
+      const d=document.createElement('div'); d.id='error'; document.body.appendChild(d); return d;
+    })();
+    el.style.display='block';
+    el.textContent = 'Error: ' + msg + ' (' + (src||'') + ':' + (line||'') + ')';
+  }catch(e){}
+};
+
+// Preact + HTM binding (FIX): htm exposes `htm`, not `htmPreact`.
+const html = htm.bind(preact.h);
 const { h, render } = preact;
 const { useState, useEffect, useMemo, useRef } = preactHooks;
 
